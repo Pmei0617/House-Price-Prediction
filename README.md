@@ -1,1 +1,7 @@
 # House-Price-Prediction
+
+### Problem Statement
+The Wisconsin housing market has been unsettling in the year 2022. The median home price sold in Wisconsin had an increase of 9.8% compared to last year and the number of homes sold was down 32.3% year over year (redfin.com). As a result, Zillow’s real estate market in the Wisconsin region suffered from the impact and experienced a plunge in houses sold.
+
+### Business Application
+The machine learning model constructed in this project aims to provide an accurate prediction of housing prices to be used by Zillow Real Estate in optimizing their real-estate marketplace. This model will benefit Zillow directly in their house pricing decisions as well as customers of Zillow in offering them a price that is fair and based. Zillow seeks to improve their housing sales in the upcoming year by setting prices that can accurately reflect the predicted housing market. To do this, Zillow has gathered house sales data in the year 2022 with specific details (features) on the houses sold and the sale price for each of the house sold. This data can be found in Excel file ‘train.csv’. Zillow has also collected information from the houses they will be putting on their marketplace in the year 2023 without sale prices set. This data can be found in Excel file ‘test.csv’. The goal for Zillow is to build a machine learning model based on the complete data with house sale prices in ‘train.csv’, then, use this model to predict the price for houses in found in ‘test.csv’.
