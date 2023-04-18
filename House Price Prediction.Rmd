@@ -1,0 +1,382 @@
+---
+title: "House-Price-Prediction"
+author: "ShengYa Mei, Binhao Chen"
+date: "2022-12-15"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Problem Statement
+
+The Wisconsin housing market has been unsettling in the year 2022. The median home price sold in Wisconsin had an increase of 9.8% compared to last year and the number of homes sold was down 32.3% year over year (redfin.com). As a result, Zillow’s real estate market in the Wisconsin region suffered from the impact and experienced a plunge in houses sold.
+
+## Business Application
+
+The machine learning model constructed in this project aims to provide an accurate prediction of housing prices to be used by Zillow Real Estate in optimizing their real-estate marketplace. This model will benefit Zillow directly in their house pricing decisions as well as customers of Zillow in offering them a price that is fair and based. Zillow seeks to improve their housing sales in the upcoming year by setting prices that can accurately reflect the predicted housing market. To do this, Zillow has gathered house sales data in the year 2022 with specific details (features) on the houses sold and the sale price for each of the house sold. This data can be found in Excel file ‘train.csv’. Zillow has also collected information from the houses they will be putting on their marketplace in the year 2023 without sale prices set. This data can be found in Excel file ‘test.csv’. The goal for Zillow is to build a machine learning model based on the complete data with house sale prices in ‘train.csv’, then, use this model to predict the price for houses in found in ‘test.csv’.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls()) # Clear the workspace
+```
+
+Import required libraries
+```{r}
+library(corrplot)
+library(ggplot2)
+library(Hmisc)
+library(dplyr)
+library(data.table)
+```
+
+Import test and training data
+```{r}
+test_dat <- read.csv('test.csv')
+train_dat <- read.csv('train.csv')
+```
+
+We will extract house id from test data to be used later for submission
+```{r}
+house_id <- test_dat$Id
+```
+
+### Exploratory Data Analysis
+Explore the imported data sets
+```{r}
+# Check the dimensions
+dim(train_dat)
+dim(test_dat)
+```
+```{r}
+# Run a summary statistics
+summary(train_dat)
+
+# We will not include the ID column since we don't need if for analysis
+train_dat <- train_dat[,2:81]
+test_dat <- test_dat[,2:80]
+```
+
+```{r}
+# Check the dimensions again
+dim(train_dat)
+dim(test_dat)
+```
+
+We will generate a correlation plot to see the relationship between each of the features and our outcome of interest, 'SalePrice'.
+```{r}
+# Select only numeric columns from our train data. 
+# We will omit all null values for now
+train_dat_numeric <- select_if(train_dat, is.numeric)
+corr <- cor(na.omit(train_dat_numeric))
+corrplot(corr, tl.cex=0.5, tl.col='black')
+```
+```{r}
+data.frame(cor(na.omit(train_dat_numeric)))
+```
+
+We see that features 'OverallQual', 'GrLivArea', 'GarageCars', 'GarageArea', 'TotalBsmtSF' and 'X1stFlrSF' have a positive correlation of over 0.6 with 'SalePrice'. We will generate scatterplot to visual their relationships.
+```{r}
+par(mfrow=c(2,3))
+attach(train_dat)
+
+plot(OverallQual, SalePrice, pch=20)
+plot(GrLivArea, SalePrice, pch=20)
+plot(GarageCars, SalePrice, pch=20)
+plot(GarageArea, SalePrice, pch=20)
+plot(TotalBsmtSF, SalePrice, pch=20)
+plot(X1stFlrSF, SalePrice, pch=20)
+
+detach(train_dat)
+```
+We see some prominent outliers in 'GrLivArea', 'TotalBsmtSF' and 'X1stFlrSF'. We will go ahead and remove them from our train data to avoid skewed results and under-performing models. 
+```{r}
+# We find that the one outlier point in both 'TotalBsmtSF' and 'X1stFlrSF' plot are 
+# from the same record and this record is the same as one of the two outliers in 'GrLivArea' 
+# plot. We will go ahead and remove them
+train_dat[train_dat$TotalBsmtSF > 5000 & train_dat$X1stFlrSF > 4000, ]
+train_dat[train_dat$GrLivArea > 4000 & train_dat$SalePrice < 300000, ]
+
+# Remove outliers
+train_dat <- train_dat[-c(524,1299),]
+```
+
+We will plot scatterplot again for these 3 features to check if outliers are removed
+```{r}
+par(mfrow=c(1,3))
+attach(train_dat)
+
+# Outliers are removed
+plot(GrLivArea, SalePrice, pch=20)
+plot(TotalBsmtSF, SalePrice, pch=20)
+plot(X1stFlrSF, SalePrice, pch=20)
+
+detach(train_dat)
+```
+
+
+```{r}
+par(mfrow=c(1,2))
+hist(train_dat$SalePrice)
+hist(log(train_dat$SalePrice))
+
+```
+
+### Data Cleaning
+Check how many missing values we have in total and in each parameter in train data
+```{r}
+paste('Total Missing Value:', sum(is.na(train_dat)))
+```
+```{r}
+var_na <- colnames(train_dat)
+df_na <- data.frame(var_na, sapply(train_dat, function(x) sum(is.na(x))))
+colnames(df_na) <- c('parameter', 'na_count')
+df_na <- filter(df_na, df_na[,2]>0)
+df_na <- df_na[order(-df_na$na_count),]
+df_na
+```
+
+Most of the NA values are explained in data set description where NA means there are none of the feature present at that household. For these NA values, we will replace them with 'none'. For missing categorical features, we will replace the NA value with the mode. 
+
+We will create a mode function to deal with some of our missing categorical values. 
+```{r}
+# create a mode function
+mode <- function(x) {
+   uniqv <- unique(x)
+   uniqv[which.max(tabulate(match(x, uniqv)))]
+}
+```
+
+```{r}
+train_dat <- train_dat %>% 
+  mutate(PoolQC = ifelse(is.na(PoolQC),'None',PoolQC),
+         MiscFeature = ifelse(is.na(MiscFeature),'None',MiscFeature),
+         Alley = ifelse(is.na(Alley),'None',Alley),
+         Fence = ifelse(is.na(Fence),'None',Fence),
+         FireplaceQu = ifelse(is.na(FireplaceQu),'None',FireplaceQu),
+         GarageType = ifelse(is.na(GarageType),'None',GarageType),
+         GarageYrBlt = ifelse(is.na(GarageYrBlt),0,GarageYrBlt),
+         GarageFinish = ifelse(is.na(GarageFinish),'None',GarageFinish),
+         GarageQual = ifelse(is.na(GarageQual),'None',GarageQual),
+         GarageCond = ifelse(is.na(GarageCond),'None',GarageCond),
+         BsmtExposure = ifelse(is.na(BsmtExposure),'None',BsmtExposure),
+         BsmtFinType2 = ifelse(is.na(BsmtFinType2),'None',BsmtFinType2),
+         BsmtQual = ifelse(is.na(BsmtQual),'None',BsmtQual),
+         BsmtCond = ifelse(is.na(BsmtCond),'None',BsmtCond),
+         BsmtFinType1 = ifelse(is.na(BsmtFinType1),'None',BsmtFinType1),
+         MasVnrType = ifelse(is.na(MasVnrType),'None',MasVnrType),
+         MasVnrArea = ifelse(is.na(MasVnrArea),0,MasVnrArea),
+         Electrical = ifelse(is.na(Electrical),mode(train_dat$Electrical),Electrical)
+         )
+```
+
+For feature 'LotFrontage', we see that it takes numerical values and that there is no specified values for NA. In this case, we will find the median of 'LotFrontage' after grouping by feature 'Neighborhood' then we will use this median to fill out missing 'LotFrontage' based on the 'Neighborhood' they are in. 
+
+```{r}
+# First we will create a temporary dataframe that removes all null vales 
+# in the 'LotFrontage' column in train set
+LotFrontage_subset <- train_dat[,c('LotFrontage')]
+temp <- train_dat[complete.cases(LotFrontage_subset),]
+```
+```{r}
+# We then group 'LotFrontage' by 'Neighborhood' to find the median in each 'Neighborhood'
+LotFrontage_median <- temp %>% 
+   group_by(Neighborhood)%>% 
+     summarise_each(funs(median), LotFrontage)
+
+LotFrontage_median
+```
+
+```{r}
+# Lastly, we will perform a left join on missing 'LotFrontage' values in the cleaned train data with the median we found
+train_dat <- left_join(train_dat, LotFrontage_median, by = 'Neighborhood') %>%
+  mutate(LotFrontage = ifelse(is.na(LotFrontage.x), LotFrontage.y, LotFrontage.x)) %>%
+  select(-LotFrontage.y, -LotFrontage.x) # remove duplicate columns
+```
+
+
+We will perform the same cleaning method for our test data set. 
+```{r}
+paste('Total Missing Value:', sum(is.na(test_dat)))
+```
+```{r}
+var_na <- colnames(test_dat)
+df_na <- data.frame(var_na, sapply(test_dat, function(x) sum(is.na(x))))
+colnames(df_na) <- c('parameter', 'na_count')
+df_na <- filter(df_na, df_na[,2]>0)
+df_na <- df_na[order(-df_na$na_count),]
+df_na
+```
+
+```{r}
+test_dat <- test_dat %>% 
+  mutate(PoolQC = ifelse(is.na(PoolQC),'None',PoolQC),
+         MiscFeature = ifelse(is.na(MiscFeature),'None',MiscFeature),
+         Alley = ifelse(is.na(Alley),'None',Alley),
+         Fence = ifelse(is.na(Fence),'None',Fence),
+         FireplaceQu = ifelse(is.na(FireplaceQu),'None',FireplaceQu),
+         GarageYrBlt = ifelse(is.na(GarageYrBlt),0,GarageYrBlt),
+         GarageFinish = ifelse(is.na(GarageFinish),'None',GarageFinish),
+         GarageQual = ifelse(is.na(GarageQual),'None',GarageQual),
+         GarageCond = ifelse(is.na(GarageCond),'None',GarageCond),
+         GarageType = ifelse(is.na(GarageType),'None',GarageType),
+         BsmtExposure = ifelse(is.na(BsmtExposure),'None',BsmtExposure),
+         BsmtFinType2 = ifelse(is.na(BsmtFinType2),'None',BsmtFinType2),
+         BsmtQual = ifelse(is.na(BsmtQual),'None',BsmtQual),
+         BsmtCond = ifelse(is.na(BsmtCond),'None',BsmtCond),
+         BsmtFinType1 = ifelse(is.na(BsmtFinType1),'None',BsmtFinType1),
+         MasVnrType = ifelse(is.na(MasVnrType),'None',MasVnrType),
+         MasVnrArea = ifelse(is.na(MasVnrArea),0,MasVnrArea),
+         MSZoning = ifelse(is.na(MSZoning),mode(test_dat$MSZoning),MSZoning),
+         Utilities = ifelse(is.na(Utilities),'AllPub',Utilities), # We will assume the two missing values for utilities                                                                    are 'AllPub' since there are no other variations
+         BsmtFullBath = ifelse(is.na(BsmtFullBath),0,BsmtFullBath),
+         BsmtHalfBath = ifelse(is.na(BsmtHalfBath),0,BsmtHalfBath),
+         Functional = ifelse(is.na(Functional),mode(test_dat$Functional),Functional),
+         Exterior1st = ifelse(is.na(Exterior1st),mode(test_dat$Exterior1st),Exterior1st),
+         Exterior2nd = ifelse(is.na(Exterior2nd),mode(test_dat$Exterior2nd),Exterior2nd),
+         BsmtFinSF1 = ifelse(is.na(BsmtFinSF1),0,BsmtFinSF1),
+         BsmtFinSF2 = ifelse(is.na(BsmtFinSF2),0,BsmtFinSF2),
+         BsmtUnfSF = ifelse(is.na(BsmtUnfSF),0,BsmtUnfSF),
+         TotalBsmtSF = ifelse(is.na(TotalBsmtSF),0,TotalBsmtSF),
+         KitchenQual = ifelse(is.na(KitchenQual),mode(test_dat$KitchenQual),KitchenQual),
+         GarageCars = ifelse(is.na(GarageCars),0,GarageCars),
+         GarageArea = ifelse(is.na(GarageArea),0,GarageArea),
+         SaleType = ifelse(is.na(SaleType),mode(test_dat$SaleType),SaleType)
+         )
+```
+
+```{r}
+# First we will create a temporary dataframe that removes all null vales in the 'LotFrontage' column in test set
+LotFrontage_subset <- test_dat[,c('LotFrontage')]
+temp <- test_dat[complete.cases(LotFrontage_subset),]
+```
+
+```{r}
+# We then group 'LotFrontage' by 'Neighborhood' to find the median in each 'Neighborhood'
+LotFrontage_median <- temp %>% 
+   group_by(Neighborhood)%>% 
+     summarise_each(funs(median), LotFrontage)
+
+LotFrontage_median
+```
+
+```{r}
+# Lastly, we will perform a left join on missing 'LotFrontage' values in the cleaned test data with the median we found
+test_dat <- left_join(test_dat, LotFrontage_median, by = 'Neighborhood') %>%
+  mutate(LotFrontage = ifelse(is.na(LotFrontage.x), LotFrontage.y, LotFrontage.x)) %>%
+  select(-LotFrontage.y, -LotFrontage.x) # remove duplicate columns
+
+```
+
+We will make sure the total number of missing values in both train and test data is now zero
+```{r}
+paste('Total Missing Value in train data:', sum(is.na(train_dat)))
+paste('Total Missing Value in test data:', sum(is.na(test_dat)))
+```
+
+Some of the numerial variables needs to be in categorical type. We will transform those
+```{r}
+str(train_dat)
+```
+
+We will store our train outcome variable 'SalePrice' separately
+```{r}
+Y.trn <- train_dat[, 79]
+```
+
+
+We will stack train and test together and transform them together
+```{r}
+full_dat <- rbind(train_dat[, c(1:78, 80)], test_dat)
+```
+
+# Lable Encoding
+
+Before we feed in our train data into ML models, we first need to transform our categorical variables into numerical attributes which can be processed by the models. We perform lable encoding using as.factor
+```{r}
+# Transform to categorical features
+full_dat$MSSubClass <- as.factor(full_dat$MSSubClass)
+full_dat$OverallQual<- as.factor(full_dat$OverallQual)
+full_dat$OverallCond<- as.factor(full_dat$OverallCond)
+
+```
+
+We will split them back to train and test data
+```{r}
+train_dat <- full_dat[1:1458,]
+test_dat <- full_dat[1459:2917,]
+```
+
+Add the outcome variable 'SalePrice' back to train data
+```{r}
+train_dat$SalePrice <- Y.trn
+```
+
+# Model training
+```{r}
+# We will create data matrix for our train and test data to be used later
+X.tst <- data.matrix(test_dat[, 1:79])
+X.trn <- data.matrix(train_dat[, 1:79])
+```
+
+# Install and run required libraries
+```{r}
+# install.packages("caret", dependencies = TRUE)
+# install.packages("randomForest")
+library(caret)
+library(randomForest)
+```
+
+Random Forest Algorithm
+```{r}
+# Set a random seed
+set.seed(42)
+# Training using ‘random forest’ algorithm
+rf_model <- train(SalePrice ~., data = train_dat, method = 'rf', trControl = trainControl(method = 'cv', number = 5)) 
+# Use 5 folds for cross-validation
+rf_model
+```
+
+The best random forest model generated has a r^2 of 89.15% and RMSE of 27235.38 and MAE of 17109.41. We will now predict the sale price for our test data using this rf model
+```{r}
+test_dat$SalePrice_rf <- predict(rf_model, newdata = test_dat) 
+# predict test data using rf_model
+
+```
+
+If we plot our rf_model, we can see the point where the machine chose to be the best number of predictors with the least RMSE. This shows our bias and variance trade-off. We want a model that is as simple as possible and as complex as necessary. 
+```{r}
+plot(rf_model)
+```
+Now, we will see if we can improve our model further with lower RMSE by running a Gradient Boost
+```{r}
+# We will now fit a boosted tree learner to the data
+#GRADIENT BOOSTING
+library(xgboost)
+parm <- list(nthread=2, max_depth=2, eta=0.10)
+# xgboost takes in data matrix and not dataframe so we will use the data matrices we created earlier
+bt_model <- xgboost(parm, data=X.trn, label=Y.trn, verbose=2, nrounds=10)
+
+```
+```{r}
+# we can evaluate the outcomes and particularly the variable importance: We can then plot the importance.
+imp <- xgb.importance(feature_names=colnames(X.trn), model=bt_model)
+
+xgb.plot.importance(imp, rel_to_first = TRUE, xlab = "Relative importance")
+```
+
+We did get a significantly lower RMSE of 14384.717832 after running through 10 iterations. We will now use this boosted tree model to predict our test data
+```{r}
+test_dat$SalePrice_bt <- predict(bt_model, newdata = X.tst)
+```
+
+We will now create our submission CSV file
+```{r}
+submission <- data.frame(cbind(house_id, test_dat$SalePrice_bt))
+colnames(submission) <- c('Id', 'SalePrice')
+write.csv(submission, "E:\\MSBA\\Machine Learning Course\\Final Project House Prices\\house_price_submission.csv", row.names=FALSE)
+```
+
